@@ -124,9 +124,9 @@ class ClaudeCodeCLI:
 
                 # Set system prompt - use custom if provided, otherwise minimal default
                 if system_prompt:
-                    options.system_prompt = system_prompt
+                    options.system_prompt = {"type": "text", "text": system_prompt}
                 else:
-                    options.system_prompt = "You are a helpful assistant."
+                    options.system_prompt = {"type": "text", "text": "You are a helpful assistant."}
 
                 # Set tool restrictions
                 if allowed_tools:
