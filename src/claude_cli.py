@@ -63,7 +63,6 @@ class ClaudeCodeCLI:
                 options=ClaudeAgentOptions(
                     max_turns=1,
                     cwd=self.cwd,
-                    system_prompt={"type": "preset", "preset": "claude_code"},
                 ),
             ):
                 messages.append(message)
@@ -123,13 +122,9 @@ class ClaudeCodeCLI:
                 if model:
                     options.model = model
 
-                # Set system prompt - CLAUDE AGENT SDK STRUCTURED FORMAT
-                # Use structured format as per SDK documentation
+                # Set system prompt only if explicitly provided
                 if system_prompt:
                     options.system_prompt = {"type": "text", "text": system_prompt}
-                else:
-                    # Use Claude Code preset to maintain expected behavior
-                    options.system_prompt = {"type": "preset", "preset": "claude_code"}
 
                 # Set tool restrictions
                 if allowed_tools:
