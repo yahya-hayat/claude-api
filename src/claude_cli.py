@@ -125,7 +125,7 @@ class ClaudeCodeCLI:
                 # Always set system prompt - plain string replaces SDK default (PR #290)
                 effective_prompt = system_prompt if system_prompt else "You are a helpful assistant."
                 options.system_prompt = effective_prompt
-                logger.info(f"System prompt set to: {effective_prompt[:80]}...")
+                logger.info(f"System prompt set to: {effective_prompt}")
 
                 # Set tool restrictions
                 if allowed_tools:
