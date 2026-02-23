@@ -12,13 +12,14 @@ class MessageAdapter:
         Convert OpenAI messages to Claude Code prompt format.
         Returns (prompt, system_prompt)
         """
-        system_prompt = None
+        system_parts = []
         conversation_parts = []
 
         for message in messages:
             if message.role == "system":
-                # Use the last system message as the system prompt
-                system_prompt = message.content
+                # Collect all system messages and concatenate them
+                if message.content and message.content.strip():
+                    system_parts.append(message.content.strip())
             elif message.role == "user":
                 conversation_parts.append(f"Human: {message.content}")
             elif message.role == "assistant":
@@ -31,6 +32,7 @@ class MessageAdapter:
         if messages and messages[-1].role != "user":
             prompt += "\n\nHuman: Please continue."
 
+        system_prompt = "\n\n".join(system_parts) if system_parts else None
         return prompt, system_prompt
 
     @staticmethod
