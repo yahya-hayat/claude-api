@@ -122,13 +122,10 @@ class ClaudeCodeCLI:
                 if model:
                     options.model = model
 
-                # Set system prompt - use custom if provided, otherwise minimal default
-                # SDK accepts str | SystemPromptPreset | None
-                # Plain string fully replaces the default (PR #290)
-                if system_prompt:
-                    options.system_prompt = system_prompt
-                else:
-                    options.system_prompt = "You are a helpful assistant."
+                # Always set system prompt - plain string replaces SDK default (PR #290)
+                effective_prompt = system_prompt if system_prompt else "You are a helpful assistant."
+                options.system_prompt = effective_prompt
+                logger.info(f"System prompt set to: {effective_prompt[:80]}...")
 
                 # Set tool restrictions
                 if allowed_tools:
