@@ -122,9 +122,11 @@ class ClaudeCodeCLI:
                 if model:
                     options.model = model
 
-                # Set system prompt only if explicitly provided
+                # Set system prompt - use custom if provided, otherwise minimal default
                 if system_prompt:
-                    options.system_prompt = {"type": "text", "text": system_prompt}
+                    options.system_prompt = system_prompt
+                else:
+                    options.system_prompt = "You are a helpful assistant."
 
                 # Set tool restrictions
                 if allowed_tools:
@@ -143,7 +145,20 @@ class ClaudeCodeCLI:
                     options.resume = session_id
 
                 # Run the query and yield messages
-                async for message in query(prompt=prompt, options=options):
+                # Wrap iteration to handle unknown message types from the CLI
+                # (e.g. rate_limit_event) that the SDK can't deserialize
+                message_iter = query(prompt=prompt, options=options).__aiter__()
+                while True:
+                    try:
+                        message = await message_iter.__anext__()
+                    except StopAsyncIteration:
+                        break
+                    except Exception as iter_err:
+                        if "Unknown message type" in str(iter_err):
+                            logger.debug(f"Skipping unrecognized SDK message: {iter_err}")
+                            continue
+                        raise
+
                     # Debug logging
                     logger.debug(f"Raw SDK message type: {type(message)}")
                     logger.debug(f"Raw SDK message: {message}")
