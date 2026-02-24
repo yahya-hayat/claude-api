@@ -400,15 +400,14 @@ REASONING_EFFORT_MAP = {
 }
 
 
-# Server-side default reasoning effort (set via env var to always enable thinking)
-DEFAULT_REASONING_EFFORT = os.getenv("DEFAULT_REASONING_EFFORT", "").lower().strip()
-
-
-def resolve_thinking_config(request: ChatCompletionRequest) -> Optional[int]:
+def resolve_thinking_config(request: ChatCompletionRequest) -> int:
     """Resolve thinking configuration from request fields.
 
-    Returns max_thinking_tokens if thinking is enabled, None otherwise.
-    Priority: request.thinking > request.reasoning_effort > DEFAULT_REASONING_EFFORT env var > None
+    Returns max_thinking_tokens. Always enables thinking — defaults to medium (8192)
+    if no explicit config is provided (workaround for clients like SillyTavern
+    that don't send reasoning_effort due to model allowlist bugs).
+
+    Priority: request.thinking > request.reasoning_effort > headers > default (medium)
     """
     # Direct Anthropic-style thinking config
     if request.thinking:
@@ -417,7 +416,6 @@ def resolve_thinking_config(request: ChatCompletionRequest) -> Optional[int]:
             budget = request.thinking.get("budget_tokens", 8192)
             logger.info(f"Thinking enabled via thinking field: budget={budget}")
             return budget
-        return None
 
     # OpenAI-compatible reasoning_effort from request
     if request.reasoning_effort:
@@ -427,16 +425,11 @@ def resolve_thinking_config(request: ChatCompletionRequest) -> Optional[int]:
             logger.info(f"Thinking enabled via reasoning_effort={effort}: budget={budget}")
             return budget
         else:
-            logger.warning(f"Unknown reasoning_effort value: '{request.reasoning_effort}', thinking not enabled")
+            logger.warning(f"Unknown reasoning_effort value: '{request.reasoning_effort}', using default")
 
-    # Fall back to server-side default
-    if DEFAULT_REASONING_EFFORT:
-        budget = REASONING_EFFORT_MAP.get(DEFAULT_REASONING_EFFORT)
-        if budget:
-            logger.info(f"Thinking enabled via DEFAULT_REASONING_EFFORT={DEFAULT_REASONING_EFFORT}: budget={budget}")
-            return budget
-
-    return None
+    # Default: always enable thinking at medium level
+    logger.info("Thinking enabled by default: budget=8192")
+    return 8192
 
 
 async def generate_streaming_response(
