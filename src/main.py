@@ -513,15 +513,35 @@ async def generate_streaming_response(
             chunk_count += 1
             chunks_buffer.append(chunk)
 
-            # Log first few chunks and every 50th to diagnose empty responses
-            if chunk_count <= 3 or chunk_count % 50 == 0:
-                chunk_keys = list(chunk.keys()) if isinstance(chunk, dict) else type(chunk).__name__
+            # Detailed diagnostic logging for every chunk
+            if isinstance(chunk, dict):
+                chunk_keys = list(chunk.keys())
                 chunk_type = chunk.get("type", chunk.get("subtype", "unknown"))
-                has_event = "event" in chunk if isinstance(chunk, dict) else False
-                logger.info(
-                    f"SDK chunk #{chunk_count}: type={chunk_type}, "
-                    f"has_event={has_event}, keys={chunk_keys}"
-                )
+                event = chunk.get("event")
+                if event and isinstance(event, dict):
+                    event_type = event.get("type", "no_type")
+                    delta = event.get("delta", {})
+                    delta_type = delta.get("type", "no_delta") if isinstance(delta, dict) else "not_dict"
+                    # Log event details for first 10 chunks and every 25th
+                    if chunk_count <= 10 or chunk_count % 25 == 0:
+                        # Show preview of content for text/thinking deltas
+                        preview = ""
+                        if delta_type == "text_delta":
+                            text = delta.get("text", "")
+                            preview = f", text_preview={text[:80]!r}"
+                        elif delta_type == "thinking_delta":
+                            thinking = delta.get("thinking", "")
+                            preview = f", thinking_preview={thinking[:80]!r}"
+                        logger.info(
+                            f"SDK chunk #{chunk_count}: event_type={event_type}, "
+                            f"delta_type={delta_type}{preview}"
+                        )
+                else:
+                    # Non-event chunks (init, result, etc.)
+                    if chunk_count <= 5 or chunk_count % 50 == 0:
+                        logger.info(
+                            f"SDK chunk #{chunk_count}: type={chunk_type}, keys={chunk_keys}"
+                        )
 
             # Check for error results (e.g. rate limit errors from the SDK)
             if chunk.get("is_error"):
@@ -579,7 +599,10 @@ async def generate_streaming_response(
                                     )
                                 ],
                             )
-                            yield f"data: {thinking_chunk.model_dump_json()}\n\n"
+                            sse_line = f"data: {thinking_chunk.model_dump_json()}\n\n"
+                            if not thinking_sent:
+                                logger.info(f"SSE YIELD (first thinking): {sse_line[:200]}")
+                            yield sse_line
                             thinking_sent = True
 
                     # Handle text deltas — emit as content (existing behavior)
@@ -599,7 +622,9 @@ async def generate_streaming_response(
                                         )
                                     ],
                                 )
-                                yield f"data: {initial_chunk.model_dump_json()}\n\n"
+                                role_line = f"data: {initial_chunk.model_dump_json()}\n\n"
+                                logger.info(f"SSE YIELD (role): {role_line[:200]}")
+                                yield role_line
                                 role_sent = True
 
                             # Stream the text delta
@@ -614,7 +639,10 @@ async def generate_streaming_response(
                                     )
                                 ],
                             )
-                            yield f"data: {stream_chunk.model_dump_json()}\n\n"
+                            sse_line = f"data: {stream_chunk.model_dump_json()}\n\n"
+                            if not content_sent:
+                                logger.info(f"SSE YIELD (first content): {sse_line[:300]}")
+                            yield sse_line
                             content_sent = True
 
         # Log summary of what we received from the SDK
