@@ -61,6 +61,8 @@ class StreamOptions(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
+    model_config = {"extra": "ignore"}
+
     model: str = Field(default_factory=get_default_model)
     messages: List[Message]
     temperature: Optional[float] = Field(default=1.0, ge=0, le=2)
@@ -86,9 +88,9 @@ class ChatCompletionRequest(BaseModel):
     stream_options: Optional[StreamOptions] = Field(
         default=None, description="Options for streaming responses"
     )
-    reasoning_effort: Optional[Literal["low", "medium", "high"]] = Field(
+    reasoning_effort: Optional[str] = Field(
         default=None,
-        description="OpenAI-compatible reasoning effort level. Maps to Claude thinking budget: low=1024, medium=8192, high=32768 tokens",
+        description="OpenAI-compatible reasoning effort level. Accepts: low/minimum, medium, high/maximum. Maps to Claude thinking budget.",
     )
     thinking: Optional[Dict[str, Any]] = Field(
         default=None,

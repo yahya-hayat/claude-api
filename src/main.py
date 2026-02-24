@@ -388,11 +388,15 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content=error_response)
 
 
-# Reasoning effort to thinking budget mapping
+# Reasoning effort to thinking budget mapping (includes SillyTavern aliases)
 REASONING_EFFORT_MAP = {
     "low": 1024,
+    "minimum": 1024,
+    "min": 1024,
     "medium": 8192,
     "high": 32768,
+    "maximum": 32768,
+    "max": 32768,
 }
 
 
@@ -413,10 +417,13 @@ def resolve_thinking_config(request: ChatCompletionRequest) -> Optional[int]:
 
     # OpenAI-compatible reasoning_effort
     if request.reasoning_effort:
-        budget = REASONING_EFFORT_MAP.get(request.reasoning_effort)
+        effort = request.reasoning_effort.lower().strip()
+        budget = REASONING_EFFORT_MAP.get(effort)
         if budget:
-            logger.info(f"Thinking enabled via reasoning_effort={request.reasoning_effort}: budget={budget}")
+            logger.info(f"Thinking enabled via reasoning_effort={effort}: budget={budget}")
             return budget
+        else:
+            logger.warning(f"Unknown reasoning_effort value: '{request.reasoning_effort}', thinking not enabled")
 
     return None
 
