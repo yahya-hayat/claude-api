@@ -23,9 +23,16 @@ class ContentPart(BaseModel):
 
 
 class Message(BaseModel):
+    model_config = {"json_schema_serialization_defaults_required": False}
+
     role: Literal["system", "user", "assistant"]
     content: Union[str, List[ContentPart]]
     name: Optional[str] = None
+    reasoning_content: Optional[str] = Field(
+        default=None,
+        description="Extended thinking / reasoning content (ecosystem standard for OpenAI-compatible APIs)",
+        json_schema_extra={"exclude_none": True},
+    )
 
     @model_validator(mode="after")
     def normalize_content(self):
@@ -78,6 +85,14 @@ class ChatCompletionRequest(BaseModel):
     )
     stream_options: Optional[StreamOptions] = Field(
         default=None, description="Options for streaming responses"
+    )
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = Field(
+        default=None,
+        description="OpenAI-compatible reasoning effort level. Maps to Claude thinking budget: low=1024, medium=8192, high=32768 tokens",
+    )
+    thinking: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description='Anthropic-style thinking config: {"type": "enabled", "budget_tokens": N} or {"type": "adaptive"}',
     )
 
     @field_validator("n")

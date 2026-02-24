@@ -103,6 +103,7 @@ class ClaudeCodeCLI:
         session_id: Optional[str] = None,
         continue_session: bool = False,
         permission_mode: Optional[str] = None,
+        max_thinking_tokens: Optional[int] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run Claude Agent using the Python SDK and yield response chunks."""
 
@@ -140,6 +141,11 @@ class ClaudeCodeCLI:
                 # Set permission mode (needed for tool execution in API context)
                 if permission_mode:
                     options.permission_mode = permission_mode
+
+                # Set thinking budget for extended thinking / reasoning
+                if max_thinking_tokens is not None and max_thinking_tokens > 0:
+                    options.max_thinking_tokens = max_thinking_tokens
+                    logger.info(f"Extended thinking enabled with budget: {max_thinking_tokens} tokens")
 
                 # Handle session continuity
                 if continue_session:

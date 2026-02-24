@@ -36,17 +36,37 @@ class MessageAdapter:
         return prompt, system_prompt
 
     @staticmethod
-    def filter_content(content: str) -> str:
+    def extract_thinking_content(content: str) -> tuple[str, Optional[str]]:
+        """
+        Separate thinking blocks from text content.
+        Returns (text_content, thinking_content).
+        """
+        if not content:
+            return content, None
+
+        thinking_pattern = r"<thinking>(.*?)</thinking>"
+        thinking_matches = re.findall(thinking_pattern, content, flags=re.DOTALL)
+        thinking_content = "\n".join(m.strip() for m in thinking_matches) if thinking_matches else None
+
+        # Remove thinking blocks from main content
+        text_content = re.sub(thinking_pattern, "", content, flags=re.DOTALL)
+        text_content = re.sub(r"\n\s*\n\s*\n", "\n\n", text_content).strip()
+
+        return text_content, thinking_content
+
+    @staticmethod
+    def filter_content(content: str, preserve_thinking: bool = False) -> str:
         """
         Filter content for unsupported features and tool usage.
-        Remove thinking blocks, tool calls, and image references.
+        Remove thinking blocks (unless preserve_thinking=True), tool calls, and image references.
         """
         if not content:
             return content
 
-        # Remove thinking blocks (common when tools are disabled but Claude tries to think)
-        thinking_pattern = r"<thinking>.*?</thinking>"
-        content = re.sub(thinking_pattern, "", content, flags=re.DOTALL)
+        # Remove thinking blocks unless thinking is enabled
+        if not preserve_thinking:
+            thinking_pattern = r"<thinking>.*?</thinking>"
+            content = re.sub(thinking_pattern, "", content, flags=re.DOTALL)
 
         # Extract content from attempt_completion blocks (these contain the actual user response)
         attempt_completion_pattern = r"<attempt_completion>(.*?)</attempt_completion>"

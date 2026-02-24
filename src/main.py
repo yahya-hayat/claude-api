@@ -388,6 +388,39 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content=error_response)
 
 
+# Reasoning effort to thinking budget mapping
+REASONING_EFFORT_MAP = {
+    "low": 1024,
+    "medium": 8192,
+    "high": 32768,
+}
+
+
+def resolve_thinking_config(request: ChatCompletionRequest) -> Optional[int]:
+    """Resolve thinking configuration from request fields.
+
+    Returns max_thinking_tokens if thinking is enabled, None otherwise.
+    Priority: request.thinking > request.reasoning_effort > None
+    """
+    # Direct Anthropic-style thinking config
+    if request.thinking:
+        thinking_type = request.thinking.get("type")
+        if thinking_type in ("enabled", "adaptive"):
+            budget = request.thinking.get("budget_tokens", 8192)
+            logger.info(f"Thinking enabled via thinking field: budget={budget}")
+            return budget
+        return None
+
+    # OpenAI-compatible reasoning_effort
+    if request.reasoning_effort:
+        budget = REASONING_EFFORT_MAP.get(request.reasoning_effort)
+        if budget:
+            logger.info(f"Thinking enabled via reasoning_effort={request.reasoning_effort}: budget={budget}")
+            return budget
+
+    return None
+
+
 async def generate_streaming_response(
     request: ChatCompletionRequest, request_id: str, claude_headers: Optional[Dict[str, Any]] = None
 ) -> AsyncGenerator[str, None]:
@@ -439,10 +472,18 @@ async def generate_streaming_response(
             claude_options["permission_mode"] = "bypassPermissions"
             logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
 
+        # Resolve thinking configuration (body fields take priority, then headers)
+        max_thinking_tokens = resolve_thinking_config(request)
+        if max_thinking_tokens is None and claude_options.get("max_thinking_tokens"):
+            max_thinking_tokens = claude_options.pop("max_thinking_tokens")
+        thinking_enabled = max_thinking_tokens is not None
+
         # Run Claude Code
         chunks_buffer = []
         role_sent = False  # Track if we've sent the initial role chunk
         content_sent = False  # Track if we've sent any content
+        in_thinking_block = False  # Track if we're currently in a thinking content block
+        thinking_sent = False  # Track if any thinking content was sent
 
         async for chunk in claude_cli.run_completion(
             prompt=prompt,
@@ -452,6 +493,7 @@ async def generate_streaming_response(
             allowed_tools=claude_options.get("allowed_tools"),
             disallowed_tools=claude_options.get("disallowed_tools"),
             permission_mode=claude_options.get("permission_mode"),
+            max_thinking_tokens=max_thinking_tokens,
             stream=True,
         ):
             chunks_buffer.append(chunk)
@@ -462,9 +504,42 @@ async def generate_streaming_response(
             if event and isinstance(event, dict):
                 event_type = event.get("type")
 
-                if event_type == "content_block_delta":
+                # Track content block types to know when we're in a thinking block
+                if event_type == "content_block_start":
+                    content_block = event.get("content_block", {})
+                    block_type = content_block.get("type", "")
+                    if block_type == "thinking":
+                        in_thinking_block = True
+                    else:
+                        in_thinking_block = False
+
+                elif event_type == "content_block_stop":
+                    in_thinking_block = False
+
+                elif event_type == "content_block_delta":
                     delta = event.get("delta", {})
-                    if delta.get("type") == "text_delta":
+                    delta_type = delta.get("type", "")
+
+                    # Handle thinking deltas — emit as reasoning_content
+                    if delta_type == "thinking_delta" and thinking_enabled:
+                        thinking_text = delta.get("thinking", "")
+                        if thinking_text:
+                            thinking_chunk = ChatCompletionStreamResponse(
+                                id=request_id,
+                                model=request.model,
+                                choices=[
+                                    StreamChoice(
+                                        index=0,
+                                        delta={"reasoning_content": thinking_text},
+                                        finish_reason=None,
+                                    )
+                                ],
+                            )
+                            yield f"data: {thinking_chunk.model_dump_json()}\n\n"
+                            thinking_sent = True
+
+                    # Handle text deltas — emit as content (existing behavior)
+                    elif delta_type == "text_delta":
                         text = delta.get("text", "")
                         if text:
                             # Send initial role chunk if we haven't already
@@ -634,11 +709,6 @@ async def chat_completions(
                     system_prompt = sampling_instructions
                 logger.debug(f"Added sampling instructions: {sampling_instructions}")
 
-            # Filter content
-            prompt = MessageAdapter.filter_content(prompt)
-            if system_prompt:
-                system_prompt = MessageAdapter.filter_content(system_prompt)
-
             # Get Claude Agent SDK options from request
             claude_options = request_body.to_claude_options()
 
@@ -649,6 +719,17 @@ async def chat_completions(
             # Validate model
             if claude_options.get("model"):
                 ParameterValidator.validate_model(claude_options["model"])
+
+            # Resolve thinking configuration (body fields take priority, then headers)
+            max_thinking_tokens = resolve_thinking_config(request_body)
+            if max_thinking_tokens is None and claude_options.get("max_thinking_tokens"):
+                max_thinking_tokens = claude_options.pop("max_thinking_tokens")
+            thinking_enabled = max_thinking_tokens is not None
+
+            # Filter content (preserve thinking blocks if thinking is enabled)
+            prompt = MessageAdapter.filter_content(prompt, preserve_thinking=thinking_enabled)
+            if system_prompt:
+                system_prompt = MessageAdapter.filter_content(system_prompt, preserve_thinking=thinking_enabled)
 
             # Handle tools - disabled by default for OpenAI compatibility
             if not request_body.enable_tools:
@@ -673,6 +754,7 @@ async def chat_completions(
                 allowed_tools=claude_options.get("allowed_tools"),
                 disallowed_tools=claude_options.get("disallowed_tools"),
                 permission_mode=claude_options.get("permission_mode"),
+                max_thinking_tokens=max_thinking_tokens,
                 stream=False,
             ):
                 chunks.append(chunk)
@@ -683,8 +765,17 @@ async def chat_completions(
             if not raw_assistant_content:
                 raise HTTPException(status_code=500, detail="No response from Claude Code")
 
-            # Filter out tool usage and thinking blocks
-            assistant_content = MessageAdapter.filter_content(raw_assistant_content)
+            # Extract thinking content if thinking was enabled, then filter
+            reasoning_content = None
+            if thinking_enabled:
+                assistant_content, reasoning_content = MessageAdapter.extract_thinking_content(
+                    raw_assistant_content
+                )
+                # Filter remaining content (tool blocks, images, etc.) but preserve thinking
+                assistant_content = MessageAdapter.filter_content(assistant_content, preserve_thinking=True)
+            else:
+                # Standard behavior: strip everything including thinking
+                assistant_content = MessageAdapter.filter_content(raw_assistant_content)
 
             # Add assistant response to session if using session mode
             if actual_session_id:
@@ -694,6 +785,15 @@ async def chat_completions(
             # Estimate tokens (rough approximation)
             prompt_tokens = MessageAdapter.estimate_tokens(prompt)
             completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
+            if reasoning_content:
+                completion_tokens += MessageAdapter.estimate_tokens(reasoning_content)
+
+            # Create response message with optional reasoning_content
+            response_message = Message(
+                role="assistant",
+                content=assistant_content,
+                reasoning_content=reasoning_content,
+            )
 
             # Create response
             response = ChatCompletionResponse(
@@ -702,7 +802,7 @@ async def chat_completions(
                 choices=[
                     Choice(
                         index=0,
-                        message=Message(role="assistant", content=assistant_content),
+                        message=response_message,
                         finish_reason="stop",
                     )
                 ],
@@ -713,7 +813,7 @@ async def chat_completions(
                 ),
             )
 
-            return response
+            return JSONResponse(content=response.model_dump(exclude_none=True))
 
     except HTTPException:
         raise

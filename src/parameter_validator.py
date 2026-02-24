@@ -139,6 +139,19 @@ class ParameterValidator:
                     f"Invalid X-Claude-Max-Thinking-Tokens header: {headers['x-claude-max-thinking-tokens']}"
                 )
 
+        # Extract reasoning effort (OpenAI-compatible shorthand)
+        if "x-claude-reasoning-effort" in headers:
+            effort = headers["x-claude-reasoning-effort"].lower().strip()
+            effort_map = {"low": 1024, "medium": 8192, "high": 32768}
+            if effort in effort_map:
+                claude_options["max_thinking_tokens"] = effort_map[effort]
+                logger.info(f"Reasoning effort '{effort}' mapped to max_thinking_tokens={effort_map[effort]}")
+            else:
+                logger.warning(
+                    f"Invalid X-Claude-Reasoning-Effort header: {headers['x-claude-reasoning-effort']}. "
+                    f"Valid values: low, medium, high"
+                )
+
         return claude_options
 
 
