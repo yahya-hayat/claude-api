@@ -521,79 +521,33 @@ async def generate_streaming_response(
                     block_type = content_block.get("type", "")
                     if block_type == "thinking":
                         in_thinking_block = True
-                        if thinking_enabled:
-                            # Send role chunk + opening tag before thinking starts
-                            if not role_sent:
-                                initial_chunk = ChatCompletionStreamResponse(
-                                    id=request_id,
-                                    model=request.model,
-                                    choices=[
-                                        StreamChoice(
-                                            index=0,
-                                            delta={"role": "assistant", "content": ""},
-                                            finish_reason=None,
-                                        )
-                                    ],
-                                )
-                                yield f"data: {initial_chunk.model_dump_json()}\n\n"
-                                role_sent = True
-                            # Emit opening <thinking> tag as content
-                            tag_chunk = ChatCompletionStreamResponse(
-                                id=request_id,
-                                model=request.model,
-                                choices=[
-                                    StreamChoice(
-                                        index=0,
-                                        delta={"content": "<thinking>\n"},
-                                        finish_reason=None,
-                                    )
-                                ],
-                            )
-                            yield f"data: {tag_chunk.model_dump_json()}\n\n"
                     else:
                         in_thinking_block = False
 
                 elif event_type == "content_block_stop":
-                    if in_thinking_block and thinking_enabled and thinking_sent:
-                        # Emit closing </thinking> tag as content
-                        tag_chunk = ChatCompletionStreamResponse(
-                            id=request_id,
-                            model=request.model,
-                            choices=[
-                                StreamChoice(
-                                    index=0,
-                                    delta={"content": "\n</thinking>\n"},
-                                    finish_reason=None,
-                                )
-                            ],
-                        )
-                        yield f"data: {tag_chunk.model_dump_json()}\n\n"
                     in_thinking_block = False
 
                 elif event_type == "content_block_delta":
                     delta = event.get("delta", {})
                     delta_type = delta.get("type", "")
 
-                    # Handle thinking deltas — emit as both content and reasoning_content
+                    # Handle thinking deltas — emit as reasoning_content only
                     if delta_type == "thinking_delta" and thinking_enabled:
                         thinking_text = delta.get("thinking", "")
                         if thinking_text:
-                            # Send as content (inline, works with all clients)
-                            # AND as reasoning_content (for clients that support it)
                             thinking_chunk = ChatCompletionStreamResponse(
                                 id=request_id,
                                 model=request.model,
                                 choices=[
                                     StreamChoice(
                                         index=0,
-                                        delta={"content": thinking_text, "reasoning_content": thinking_text},
+                                        delta={"reasoning_content": thinking_text},
                                         finish_reason=None,
                                     )
                                 ],
                             )
                             yield f"data: {thinking_chunk.model_dump_json()}\n\n"
                             thinking_sent = True
-                            content_sent = True
 
                     # Handle text deltas — emit as content (existing behavior)
                     elif delta_type == "text_delta":
@@ -825,16 +779,11 @@ async def chat_completions(
             # Extract thinking content if thinking was enabled, then filter
             reasoning_content = None
             if thinking_enabled:
-                text_content, reasoning_content = MessageAdapter.extract_thinking_content(
+                assistant_content, reasoning_content = MessageAdapter.extract_thinking_content(
                     raw_assistant_content
                 )
                 # Filter remaining content (tool blocks, images, etc.) but preserve thinking
-                text_content = MessageAdapter.filter_content(text_content, preserve_thinking=True)
-                # Inline thinking in content as <thinking> tags so all clients can see it
-                if reasoning_content:
-                    assistant_content = f"<thinking>\n{reasoning_content}\n</thinking>\n{text_content}"
-                else:
-                    assistant_content = text_content
+                assistant_content = MessageAdapter.filter_content(assistant_content, preserve_thinking=True)
             else:
                 # Standard behavior: strip everything including thinking
                 assistant_content = MessageAdapter.filter_content(raw_assistant_content)
