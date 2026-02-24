@@ -456,85 +456,47 @@ async def generate_streaming_response(
         ):
             chunks_buffer.append(chunk)
 
-            # Check if we have an assistant message
-            # Handle both old format (type/message structure) and new format (direct content)
-            content = None
-            if chunk.get("type") == "assistant" and "message" in chunk:
-                # Old format: {"type": "assistant", "message": {"content": [...]}}
-                message = chunk["message"]
-                if isinstance(message, dict) and "content" in message:
-                    content = message["content"]
-            elif "content" in chunk and isinstance(chunk["content"], list):
-                # New format: {"content": [TextBlock(...)]}  (converted AssistantMessage)
-                content = chunk["content"]
+            # Handle StreamEvent messages (token-by-token streaming)
+            # StreamEvent has an 'event' dict with content_block_delta / text_delta
+            event = chunk.get("event")
+            if event and isinstance(event, dict):
+                event_type = event.get("type")
 
-            if content is not None:
-                # Send initial role chunk if we haven't already
-                if not role_sent:
-                    initial_chunk = ChatCompletionStreamResponse(
-                        id=request_id,
-                        model=request.model,
-                        choices=[
-                            StreamChoice(
-                                index=0,
-                                delta={"role": "assistant", "content": ""},
-                                finish_reason=None,
-                            )
-                        ],
-                    )
-                    yield f"data: {initial_chunk.model_dump_json()}\n\n"
-                    role_sent = True
+                if event_type == "content_block_delta":
+                    delta = event.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        text = delta.get("text", "")
+                        if text:
+                            # Send initial role chunk if we haven't already
+                            if not role_sent:
+                                initial_chunk = ChatCompletionStreamResponse(
+                                    id=request_id,
+                                    model=request.model,
+                                    choices=[
+                                        StreamChoice(
+                                            index=0,
+                                            delta={"role": "assistant", "content": ""},
+                                            finish_reason=None,
+                                        )
+                                    ],
+                                )
+                                yield f"data: {initial_chunk.model_dump_json()}\n\n"
+                                role_sent = True
 
-                # Handle content blocks
-                if isinstance(content, list):
-                    for block in content:
-                        # Handle TextBlock objects from Claude Agent SDK
-                        if hasattr(block, "text"):
-                            raw_text = block.text
-                        # Handle dictionary format for backward compatibility
-                        elif isinstance(block, dict) and block.get("type") == "text":
-                            raw_text = block.get("text", "")
-                        else:
-                            continue
-
-                        # Filter out tool usage and thinking blocks
-                        filtered_text = MessageAdapter.filter_content(raw_text)
-
-                        if filtered_text and not filtered_text.isspace():
-                            # Create streaming chunk
+                            # Stream the text delta
                             stream_chunk = ChatCompletionStreamResponse(
                                 id=request_id,
                                 model=request.model,
                                 choices=[
                                     StreamChoice(
                                         index=0,
-                                        delta={"content": filtered_text},
+                                        delta={"content": text},
                                         finish_reason=None,
                                     )
                                 ],
                             )
-
                             yield f"data: {stream_chunk.model_dump_json()}\n\n"
                             content_sent = True
-
-                elif isinstance(content, str):
-                    # Filter out tool usage and thinking blocks
-                    filtered_content = MessageAdapter.filter_content(content)
-
-                    if filtered_content and not filtered_content.isspace():
-                        # Create streaming chunk
-                        stream_chunk = ChatCompletionStreamResponse(
-                            id=request_id,
-                            model=request.model,
-                            choices=[
-                                StreamChoice(
-                                    index=0, delta={"content": filtered_content}, finish_reason=None
-                                )
-                            ],
-                        )
-
-                        yield f"data: {stream_chunk.model_dump_json()}\n\n"
-                        content_sent = True
 
         # Handle case where no role was sent (send at least role chunk)
         if not role_sent:

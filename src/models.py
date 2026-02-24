@@ -106,8 +106,8 @@ class ChatCompletionRequest(BaseModel):
 
         if self.max_tokens is not None or self.max_completion_tokens is not None:
             max_val = self.max_completion_tokens or self.max_tokens
-            info_messages.append(
-                f"max_tokens={max_val} will be mapped to max_thinking_tokens (best-effort)"
+            warnings.append(
+                f"max_tokens={max_val} is ignored (SDK has no output token limit, use CLAUDE_CODE_MAX_OUTPUT_TOKENS env var)"
             )
 
         if self.presence_penalty != 0:
@@ -181,15 +181,9 @@ class ChatCompletionRequest(BaseModel):
         if self.model:
             options["model"] = self.model
 
-        # Map max_tokens to max_thinking_tokens (best effort)
-        max_token_value = self.max_completion_tokens or self.max_tokens
-        if max_token_value is not None:
-            # Claude SDK doesn't have exact token limiting, but we can try max_thinking_tokens
-            # This is approximate and may not work as expected
-            options["max_thinking_tokens"] = max_token_value
-            logger.info(
-                f"Mapped max_tokens={max_token_value} to max_thinking_tokens (approximate behavior)"
-            )
+        # Note: max_tokens/max_completion_tokens are ignored.
+        # The SDK has no direct output token limit. Use CLAUDE_CODE_MAX_OUTPUT_TOKENS
+        # env var if needed. Mapping to max_thinking_tokens was incorrect and broke streaming.
 
         # Use user field for session identification if provided
         if self.user:

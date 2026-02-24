@@ -115,8 +115,12 @@ class ClaudeCodeCLI:
                     os.environ[key] = value
 
             try:
-                # Build SDK options
-                options = ClaudeAgentOptions(max_turns=max_turns, cwd=self.cwd)
+                # Build SDK options with streaming enabled
+                options = ClaudeAgentOptions(
+                    max_turns=max_turns,
+                    cwd=self.cwd,
+                    include_partial_messages=True,
+                )
 
                 # Set model if specified
                 if model:
