@@ -496,6 +496,8 @@ async def generate_streaming_response(
         in_thinking_block = False  # Track if we're currently in a thinking content block
         thinking_sent = False  # Track if any thinking content was sent
 
+        rate_limit_hit = False
+
         async for chunk in claude_cli.run_completion(
             prompt=prompt,
             system_prompt=system_prompt,
@@ -508,6 +510,25 @@ async def generate_streaming_response(
             stream=True,
         ):
             chunks_buffer.append(chunk)
+
+            # Check for error results (e.g. rate limit errors from the SDK)
+            if chunk.get("is_error"):
+                error_msg = chunk.get("error_message", "Unknown error")
+                if chunk.get("is_rate_limit"):
+                    rate_limit_hit = True
+                    logger.warning(f"Rate limit error during streaming: {error_msg}")
+                    error_chunk = {
+                        "error": {
+                            "message": "Rate limit exceeded. The Anthropic API is throttling requests. Please retry after a short wait.",
+                            "type": "rate_limit_error",
+                            "code": "rate_limit_exceeded",
+                        }
+                    }
+                else:
+                    error_chunk = {"error": {"message": error_msg, "type": "api_error"}}
+                yield f"data: {json.dumps(error_chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
             # Handle StreamEvent messages (token-by-token streaming)
             # StreamEvent has an 'event' dict with content_block_delta / text_delta
@@ -768,6 +789,16 @@ async def chat_completions(
                 max_thinking_tokens=max_thinking_tokens,
                 stream=False,
             ):
+                # Check for error results (e.g. rate limit errors from the SDK)
+                if chunk.get("is_error"):
+                    error_msg = chunk.get("error_message", "Unknown error")
+                    if chunk.get("is_rate_limit"):
+                        raise HTTPException(
+                            status_code=429,
+                            detail="Rate limit exceeded. The Anthropic API is throttling requests. Please retry after a short wait.",
+                        )
+                    else:
+                        raise HTTPException(status_code=500, detail=error_msg)
                 chunks.append(chunk)
 
             # Extract assistant message
@@ -892,6 +923,16 @@ async def anthropic_messages(
             permission_mode="bypassPermissions",
             stream=False,
         ):
+            # Check for error results (e.g. rate limit errors from the SDK)
+            if chunk.get("is_error"):
+                error_msg = chunk.get("error_message", "Unknown error")
+                if chunk.get("is_rate_limit"):
+                    raise HTTPException(
+                        status_code=429,
+                        detail="Rate limit exceeded. The Anthropic API is throttling requests. Please retry after a short wait.",
+                    )
+                else:
+                    raise HTTPException(status_code=500, detail=error_msg)
             chunks.append(chunk)
 
         # Extract assistant message

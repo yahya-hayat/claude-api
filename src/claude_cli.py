@@ -51,45 +51,88 @@ class ClaudeCodeCLI:
         # Store auth environment variables for SDK
         self.claude_env_vars = auth_manager.get_claude_code_env_vars()
 
-    async def verify_cli(self) -> bool:
-        """Verify Claude Agent SDK is working and authenticated."""
-        try:
-            # Test SDK with a simple query
-            logger.info("Testing Claude Agent SDK...")
+    async def verify_cli(self, retries: int = 3) -> bool:
+        """Verify Claude Agent SDK is working and authenticated.
 
-            messages = []
-            async for message in query(
-                prompt="Hello",
-                options=ClaudeAgentOptions(
-                    max_turns=1,
-                    cwd=self.cwd,
-                ),
-            ):
-                messages.append(message)
-                # Break early on first response to speed up verification
-                # Handle both dict and object types
-                msg_type = (
-                    getattr(message, "type", None)
-                    if hasattr(message, "type")
-                    else message.get("type") if isinstance(message, dict) else None
+        Retries on rate limit errors with exponential backoff.
+        """
+        import asyncio
+
+        last_error = None
+        for attempt in range(1, retries + 1):
+            try:
+                logger.info(f"Testing Claude Agent SDK... (attempt {attempt}/{retries})")
+
+                messages = []
+                # Use the same resilient iteration pattern as run_completion()
+                # to gracefully skip unknown message types (e.g. rate_limit_event)
+                message_iter = query(
+                    prompt="Hello",
+                    options=ClaudeAgentOptions(
+                        max_turns=1,
+                        cwd=self.cwd,
+                    ),
+                ).__aiter__()
+
+                while True:
+                    try:
+                        message = await message_iter.__anext__()
+                    except StopAsyncIteration:
+                        break
+                    except Exception as iter_err:
+                        err_str = str(iter_err)
+                        if "Unknown message type" in err_str:
+                            logger.debug(f"Skipping unrecognized SDK message during verification: {iter_err}")
+                            continue
+                        raise
+
+                    messages.append(message)
+                    # Break early on first response to speed up verification
+                    # Handle both dict and object types
+                    msg_type = (
+                        getattr(message, "type", None)
+                        if hasattr(message, "type")
+                        else message.get("type") if isinstance(message, dict) else None
+                    )
+                    if msg_type == "assistant":
+                        break
+
+                if messages:
+                    logger.info("✅ Claude Agent SDK verified successfully")
+                    return True
+                else:
+                    logger.warning("⚠️ Claude Agent SDK test returned no messages")
+                    return False
+
+            except Exception as e:
+                last_error = e
+                err_str = str(e)
+                is_rate_limit = (
+                    "rate_limit" in err_str.lower()
+                    or "rate limit" in err_str.lower()
+                    or "429" in err_str
+                    or "overloaded" in err_str.lower()
                 )
-                if msg_type == "assistant":
-                    break
 
-            if messages:
-                logger.info("✅ Claude Agent SDK verified successfully")
-                return True
-            else:
-                logger.warning("⚠️ Claude Agent SDK test returned no messages")
+                if is_rate_limit and attempt < retries:
+                    wait_time = 2 ** attempt  # 2s, 4s, 8s
+                    logger.warning(
+                        f"Rate limited during SDK verification (attempt {attempt}/{retries}), "
+                        f"retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+
+                logger.error(f"Claude Agent SDK verification failed: {e}")
+                logger.warning("Please ensure Claude Code is installed and authenticated:")
+                logger.warning("  1. Install: npm install -g @anthropic-ai/claude-code")
+                logger.warning("  2. Set ANTHROPIC_API_KEY environment variable")
+                logger.warning("  3. Test: claude --print 'Hello'")
                 return False
 
-        except Exception as e:
-            logger.error(f"Claude Agent SDK verification failed: {e}")
-            logger.warning("Please ensure Claude Code is installed and authenticated:")
-            logger.warning("  1. Install: npm install -g @anthropic-ai/claude-code")
-            logger.warning("  2. Set ANTHROPIC_API_KEY environment variable")
-            logger.warning("  3. Test: claude --print 'Hello'")
-            return False
+        # Exhausted all retries
+        logger.error(f"Claude Agent SDK verification failed after {retries} attempts: {last_error}")
+        return False
 
     async def run_completion(
         self,
@@ -163,8 +206,13 @@ class ClaudeCodeCLI:
                     except StopAsyncIteration:
                         break
                     except Exception as iter_err:
-                        if "Unknown message type" in str(iter_err):
-                            logger.debug(f"Skipping unrecognized SDK message: {iter_err}")
+                        err_str = str(iter_err)
+                        if "Unknown message type" in err_str:
+                            # Log rate limit events as warnings (not debug) since they affect responses
+                            if "rate_limit" in err_str.lower():
+                                logger.warning(f"Rate limit event from API: {iter_err}")
+                            else:
+                                logger.debug(f"Skipping unrecognized SDK message: {iter_err}")
                             continue
                         raise
 
@@ -202,12 +250,23 @@ class ClaudeCodeCLI:
                             os.environ[key] = original_value
 
         except Exception as e:
-            logger.error(f"Claude Agent SDK error: {e}")
+            err_str = str(e)
+            is_rate_limit = (
+                "rate_limit" in err_str.lower()
+                or "rate limit" in err_str.lower()
+                or "429" in err_str
+                or "overloaded" in err_str.lower()
+            )
+            if is_rate_limit:
+                logger.warning(f"Claude API rate limit hit: {e}")
+            else:
+                logger.error(f"Claude Agent SDK error: {e}")
             # Yield error message in the expected format
             yield {
                 "type": "result",
                 "subtype": "error_during_execution",
                 "is_error": True,
+                "is_rate_limit": is_rate_limit,
                 "error_message": str(e),
             }
 
