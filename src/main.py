@@ -497,6 +497,7 @@ async def generate_streaming_response(
         thinking_sent = False  # Track if any thinking content was sent
 
         rate_limit_hit = False
+        chunk_count = 0
 
         async for chunk in claude_cli.run_completion(
             prompt=prompt,
@@ -509,7 +510,18 @@ async def generate_streaming_response(
             max_thinking_tokens=max_thinking_tokens,
             stream=True,
         ):
+            chunk_count += 1
             chunks_buffer.append(chunk)
+
+            # Log first few chunks and every 50th to diagnose empty responses
+            if chunk_count <= 3 or chunk_count % 50 == 0:
+                chunk_keys = list(chunk.keys()) if isinstance(chunk, dict) else type(chunk).__name__
+                chunk_type = chunk.get("type", chunk.get("subtype", "unknown"))
+                has_event = "event" in chunk if isinstance(chunk, dict) else False
+                logger.info(
+                    f"SDK chunk #{chunk_count}: type={chunk_type}, "
+                    f"has_event={has_event}, keys={chunk_keys}"
+                )
 
             # Check for error results (e.g. rate limit errors from the SDK)
             if chunk.get("is_error"):
@@ -604,6 +616,13 @@ async def generate_streaming_response(
                             )
                             yield f"data: {stream_chunk.model_dump_json()}\n\n"
                             content_sent = True
+
+        # Log summary of what we received from the SDK
+        logger.info(
+            f"SDK stream complete: {chunk_count} chunks, "
+            f"content_sent={content_sent}, thinking_sent={thinking_sent}, "
+            f"role_sent={role_sent}"
+        )
 
         # Handle case where no role was sent (send at least role chunk)
         if not role_sent:
