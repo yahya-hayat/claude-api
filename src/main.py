@@ -122,6 +122,18 @@ def prompt_for_api_protection() -> Optional[str]:
             return None
 
 
+# Write OAuth credentials from environment variable if provided
+# This allows deploying to platforms like Railway without volume mounts
+_oauth_creds = os.getenv("CLAUDE_OAUTH_CREDENTIALS")
+if _oauth_creds:
+    _creds_dir = os.path.expanduser("~/.claude")
+    os.makedirs(_creds_dir, exist_ok=True)
+    _creds_path = os.path.join(_creds_dir, ".credentials.json")
+    if not os.path.exists(_creds_path):
+        with open(_creds_path, "w") as f:
+            f.write(_oauth_creds)
+        logger.info("Wrote OAuth credentials from CLAUDE_OAUTH_CREDENTIALS env var")
+
 # Initialize Claude CLI
 claude_cli = ClaudeCodeCLI(
     timeout=int(os.getenv("MAX_TIMEOUT", "600000")), cwd=os.getenv("CLAUDE_CWD")
